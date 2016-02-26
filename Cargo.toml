@@ -1,0 +1,7 @@
+[package]
+name = "pvoc"
+version = "0.1.0"
+authors = ["Noah Weninger <nweninge@ualberta.ca>"]
+
+[dependencies]
+dft = "0.4.1"
