@@ -8,17 +8,17 @@ trait Processor {
 
 struct PhaseVocoder<P: Processor> {
     sample_rate: f64,
-    block_size: u32,
-    overlap: u32,
+    freq_res: u32,
+    time_res: u32,
     processor: P,
 }
 
 impl<P: Processor> PhaseVocoder<P> {
-    fn new(sample_rate: f64, block_size: u32, overlap: u32, processor: P) -> PhaseVocoder<P> {
+    fn new(sample_rate: f64, freq_res: u32, time_res: u32, processor: P) -> PhaseVocoder<P> {
         PhaseVocoder {
             sample_rate: sample_rate,
-            block_size: block_size,
-            overlap: overlap,
+            freq_res: freq_res,
+            time_res: time_res,
             processor: processor,
         }
     }
