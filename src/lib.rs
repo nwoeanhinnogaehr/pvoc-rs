@@ -1,9 +1,11 @@
+#![feature(associated_consts)]
+
 extern crate dft;
 
 use dft::c64;
 
 trait Processor {
-    fn process(&self, input: &[c64], output: &mut [c64]);
+    fn process(&self, input: &[&[c64]], output: &mut [&mut [c64]]);
 }
 
 struct PhaseVocoder<P: Processor> {
@@ -23,7 +25,7 @@ impl<P: Processor> PhaseVocoder<P> {
         }
     }
 
-    fn write_in_samples(&mut self, samples: &[f64]) {}
+    fn write_in_samples(&mut self, samples: &[&[f64]]) {}
 
-    fn read_out_samples(&mut self, samples: &mut [f64]) {}
+    fn read_out_samples(&mut self, samples: &mut [&mut [f64]]) {}
 }
