@@ -47,14 +47,13 @@ impl PhaseVocoder {
     ///
     /// channels: number of channels of audio
     /// sample_rate: it's the sample rate
-    /// freq_res: log2 size of fourier transform
+    /// frame_size: fourier transform size
     /// time_res: number of frames to overlap
     pub fn new(channels: usize,
                sample_rate: f64,
-               freq_res: usize,
+               frame_size: usize,
                time_res: usize)
                -> PhaseVocoder {
-        let frame_size = 1 << freq_res;
         PhaseVocoder {
             channels: channels,
             sample_rate: sample_rate,
