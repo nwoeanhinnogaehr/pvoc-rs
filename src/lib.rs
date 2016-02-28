@@ -3,7 +3,7 @@ extern crate num;
 
 use std::f64::consts::PI;
 use std::collections::VecDeque;
-use num::Complex;
+use num::{Float, Complex, FromPrimitive, ToPrimitive};
 
 #[allow(non_camel_case_types)]
 type c64 = Complex<f64>;
@@ -76,8 +76,10 @@ impl PhaseVocoder {
     /// Read samples from input into queue, processs, then fill as much of output as possible.
     /// `processor` is a function to manipulate the spectrum before it is resynthesized. It's called
     /// like: `processor(num_channels, num_bins, &analysis_output, &mut synthesis_input)`
-    pub fn process<F>(&mut self, input: &[&[f32]], output: &mut [&mut [f32]], processor: F)
-        where F: Fn(usize, usize, &[Vec<Bin>], &mut [Vec<Bin>])
+    /// Samples are expected to be normalized to the range [-1, 1].
+    pub fn process<S, F>(&mut self, input: &[&[S]], output: &mut [&mut [S]], processor: F)
+        where S: Float + ToPrimitive + FromPrimitive,
+              F: Fn(usize, usize, &[Vec<Bin>], &mut [Vec<Bin>])
     {
         assert_eq!(input.len(), self.channels);
         assert_eq!(output.len(), self.channels);
@@ -85,7 +87,7 @@ impl PhaseVocoder {
         // push samples to input queue
         for chan in 0..input.len() {
             for samp in 0..input[chan].len() {
-                self.in_buf[chan].push_back(input[chan][samp] as f64);
+                self.in_buf[chan].push_back(input[chan][samp].to_f64().unwrap());
                 self.samples_waiting += 1;
             }
         }
@@ -187,7 +189,7 @@ impl PhaseVocoder {
         for chan in 0..self.channels {
             for samp in 0..output[chan].len() {
                 output[chan][samp] = match self.out_buf[chan].pop_front() {
-                    Some(x) => x as f32,
+                    Some(x) => FromPrimitive::from_f64(x).unwrap(),
                     None => break,
                 }
             }
