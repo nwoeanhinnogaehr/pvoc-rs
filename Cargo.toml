@@ -2,6 +2,11 @@
 name = "pvoc"
 version = "0.1.0"
 authors = ["Noah Weninger <nweninge@ualberta.ca>"]
+description = "A phase vocoder for making audio effects"
+repository = "https://github.com/nwoeanhinnogaehr/pvoc-rs"
+readme = "README.md"
+keywords = ["audio", "fft", "dsp", "fourier"]
+license = "GPL-3.0"
 
 [dependencies]
 rustfft = "1.0.1"
