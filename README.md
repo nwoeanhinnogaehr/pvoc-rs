@@ -10,7 +10,7 @@ self.pvoc.process(&input_samples,
     for i in 0..channels {
         for j in 0..bins {
             output[i][j] = input[i][j]; // change this!
-        ]
+        }
     }
 }
 
