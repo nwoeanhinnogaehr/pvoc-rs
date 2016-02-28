@@ -4,5 +4,5 @@ version = "0.1.0"
 authors = ["Noah Weninger <nweninge@ualberta.ca>"]
 
 [dependencies]
-rustfft = "*"
-num = "*"
+rustfft = "1.0.1"
+num = "0.1.31"
