@@ -1,8 +1,12 @@
-extern crate dft;
+extern crate rustfft;
+extern crate num;
 
-use dft::{Operation, Plan, c64};
 use std::f64::consts::PI;
 use std::collections::VecDeque;
+use num::Complex;
+
+#[allow(non_camel_case_types)]
+type c64 = Complex<f64>;
 
 #[derive(Copy, Clone)]
 pub struct Bin {
@@ -34,8 +38,8 @@ pub struct PhaseVocoder {
     sum_phase: Vec<Vec<f64>>,
     output_accum: Vec<VecDeque<f64>>,
 
-    forward_plan: Plan,
-    backward_plan: Plan,
+    forward_fft: rustfft::FFT<f64>,
+    backward_fft: rustfft::FFT<f64>,
 }
 
 impl PhaseVocoder {
@@ -58,8 +62,8 @@ impl PhaseVocoder {
             sum_phase: vec![vec![0.0; frame_size]; channels],
             output_accum: vec![VecDeque::new(); channels],
 
-            forward_plan: Plan::new(Operation::Forward, frame_size),
-            backward_plan: Plan::new(Operation::Backward, frame_size),
+            forward_fft: rustfft::FFT::new(frame_size, false),
+            backward_fft: rustfft::FFT::new(frame_size, true),
         }
     }
 
@@ -87,15 +91,16 @@ impl PhaseVocoder {
                 for chan in 0..self.channels {
                     let samples = &self.in_buf[chan];
                     let mut last_phase = &mut self.last_phase[chan];
-                    let mut fft_worksp = vec![c64::new(0.0, 0.0); frame_size];
+                    let mut fft_in = vec![c64::new(0.0, 0.0); frame_size];
+                    let mut fft_out = vec![c64::new(0.0, 0.0); frame_size];
                     for i in 0..frame_size {
                         let window = window((i as f64) / (frame_size as f64));
-                        fft_worksp[i] = c64::new(samples[i] * window, 0.0);
+                        fft_in[i] = c64::new(samples[i] * window, 0.0);
                     }
-                    dft::transform(&mut fft_worksp, &self.forward_plan);
+                    self.forward_fft.process(&fft_in, &mut fft_out);
 
                     for i in 0..frame_size {
-                        let x = fft_worksp[i];
+                        let x = fft_out[i];
 
                         let (amp, phase) = x.to_polar();
 
@@ -123,7 +128,8 @@ impl PhaseVocoder {
                 // SYNTHESIS
                 for chan in 0..self.channels {
                     let mut sum_phase = &mut self.sum_phase[chan];
-                    let mut fft_worksp = vec![c64::new(0.0, 0.0); frame_size];
+                    let mut fft_in = vec![c64::new(0.0, 0.0); frame_size];
+                    let mut fft_out = vec![c64::new(0.0, 0.0); frame_size];
                     for i in 0..frame_size {
                         let amp = synthesis_in[chan][i].amp;
                         let mut tmp = synthesis_in[chan][i].freq;
@@ -135,15 +141,15 @@ impl PhaseVocoder {
                         sum_phase[i] += tmp;
                         let phase = sum_phase[i];
 
-                        fft_worksp[i] = c64::from_polar(&amp, &phase);
+                        fft_in[i] = c64::from_polar(&amp, &phase);
                     }
-                    dft::transform(&mut fft_worksp, &self.backward_plan);
+                    self.backward_fft.process(&fft_in, &mut fft_out);
                     for i in 0..frame_size {
                         let window = window((i as f64) / (frame_size as f64));
                         if i == self.output_accum[chan].len() {
                             self.output_accum[chan].push_back(0.0);
                         }
-                        self.output_accum[chan][i] += window * fft_worksp[i].re /
+                        self.output_accum[chan][i] += window * fft_out[i].re /
                                                       ((frame_size as f64) *
                                                        (self.time_res as f64));
                     }
