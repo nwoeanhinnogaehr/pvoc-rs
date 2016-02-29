@@ -1,5 +1,5 @@
 # pvoc-rs
-A phase vocoder written in Rust
+A phase vocoder written in Rust.
 
 ### Example usage
 ```rust
@@ -17,3 +17,5 @@ pvoc.process(&input_samples,
 });
 
 ```
+
+Check out [pvoc-plugins](https://github.com/nwoeanhinnogaehr/pvoc-plugins) for some LADSPA plugins that use this library.
