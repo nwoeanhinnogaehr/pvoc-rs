@@ -98,9 +98,13 @@ impl PhaseVocoder {
     /// `synthesis_input`.
     ///
     /// Samples are expected to be normalized to the range [-1, 1].
-    pub fn process<S, F>(&mut self, input: &[&[S]], output: &mut [&mut [S]], processor: F) -> usize
+    pub fn process<S, F>(&mut self,
+                         input: &[&[S]],
+                         output: &mut [&mut [S]],
+                         mut processor: F)
+                         -> usize
         where S: Float + ToPrimitive + FromPrimitive,
-              F: Fn(usize, usize, &[Vec<Bin>], &mut [Vec<Bin>])
+              F: FnMut(usize, usize, &[Vec<Bin>], &mut [Vec<Bin>])
     {
         assert_eq!(input.len(), self.channels);
         assert_eq!(output.len(), self.channels);
