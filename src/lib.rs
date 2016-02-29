@@ -98,7 +98,7 @@ impl PhaseVocoder {
     /// `synthesis_input`.
     ///
     /// Samples are expected to be normalized to the range [-1, 1].
-    pub fn process<S, F>(&mut self, input: &[&[S]], output: &mut [&mut [S]], processor: F)
+    pub fn process<S, F>(&mut self, input: &[&[S]], output: &mut [&mut [S]], processor: F) -> usize
         where S: Float + ToPrimitive + FromPrimitive,
               F: Fn(usize, usize, &[Vec<Bin>], &mut [Vec<Bin>])
     {
@@ -210,14 +210,17 @@ impl PhaseVocoder {
         }
 
         // pop samples from output queue
+        let mut n_written = 0;
         for chan in 0..self.channels {
             for samp in 0..output[chan].len() {
                 output[chan][samp] = match self.out_buf[chan].pop_front() {
                     Some(x) => FromPrimitive::from_f64(x).unwrap(),
                     None => break,
-                }
+                };
+                n_written += 1;
             }
         }
+        n_written / self.channels
     }
 }
 
