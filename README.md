@@ -3,7 +3,9 @@ A phase vocoder written in Rust
 
 ### Example usage
 ```rust
-let pvoc = PhaseVocoder::new(1, 44100.0, 8, 4);
+use pvoc::{PhaseVocoder, Bin};
+
+let pvoc = PhaseVocoder::new(1, 44100.0, 256, 4);
 pvoc.process(&input_samples,
              &mut output_samples,
              |channels: usize, bins: usize, input: &[Vec<Bin>], output: &mut [Vec<Bin>]| {
