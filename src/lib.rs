@@ -24,7 +24,9 @@ impl Bin {
     }
 }
 
-/// source: http://blogs.zynaptiq.com/bernsee/pitch-shifting-using-the-ft/
+/// A phase vocoder.
+///
+/// Roughly translated from http://blogs.zynaptiq.com/bernsee/pitch-shifting-using-the-ft/
 pub struct PhaseVocoder {
     channels: usize,
     sample_rate: f64,
@@ -45,15 +47,23 @@ pub struct PhaseVocoder {
 impl PhaseVocoder {
     /// Constructs a new phase vocoder.
     ///
-    /// channels: number of channels of audio
-    /// sample_rate: it's the sample rate
-    /// frame_size: fourier transform size
-    /// time_res: number of frames to overlap
+    /// `channels` is the number of channels of audio.
+    ///
+    /// `sample_rate` is the sample rate.
+    ///
+    /// `frame_size` is the fourier transform size. This should be a power of 2 for optimal
+    /// performance. Will be rounded to a multiple of `time_res`.
+    ///
+    /// `time_res` is the number of frames to overlap.
     pub fn new(channels: usize,
                sample_rate: f64,
                frame_size: usize,
                time_res: usize)
                -> PhaseVocoder {
+        let mut frame_size = frame_size / time_res * time_res;
+        if frame_size == 0 {
+            frame_size = time_res;
+        }
         PhaseVocoder {
             channels: channels,
             sample_rate: sample_rate,
@@ -72,9 +82,21 @@ impl PhaseVocoder {
         }
     }
 
-    /// Read samples from input into queue, processs, then fill as much of output as possible.
-    /// `processor` is a function to manipulate the spectrum before it is resynthesized. It's called
-    /// like: `processor(num_channels, num_bins, &analysis_output, &mut synthesis_input)`
+    pub fn num_channels(&self) -> usize {
+        self.channels
+    }
+
+    pub fn num_bins(&self) -> usize {
+        self.frame_size
+    }
+
+    /// Reads samples from `input`, processes the samples, then resynthesizes as many samples as
+    /// possible into `output`. Returns the number of samples written to `output`.
+    ///
+    /// `processor` is a function to manipulate the spectrum before it is resynthesized. Its
+    /// arguments are respectively `num_channels`, `num_bins`, `analysis_output` and
+    /// `synthesis_input`.
+    ///
     /// Samples are expected to be normalized to the range [-1, 1].
     pub fn process<S, F>(&mut self, input: &[&[S]], output: &mut [&mut [S]], processor: F)
         where S: Float + ToPrimitive + FromPrimitive,
@@ -91,31 +113,34 @@ impl PhaseVocoder {
             }
         }
         while self.samples_waiting >= 2 * self.frame_size * self.channels {
-            let frame_size = self.frame_size;
-            let step_size = frame_size / self.time_res;
-            let expect = 2.0 * PI * (step_size as f64) / (frame_size as f64);
-            let freq_per_bin = self.sample_rate / (frame_size as f64);
+            let frame_sizef = self.frame_size as f64;
+            let time_resf = self.time_res as f64;
+            let step_size = frame_sizef / time_resf;
+            let expect = 2.0 * PI * step_size / frame_sizef;
+            let freq_per_bin = self.sample_rate / frame_sizef;
+            let mut fft_in = vec![c64::new(0.0, 0.0); self.frame_size];
+            let mut fft_out = vec![c64::new(0.0, 0.0); self.frame_size];
 
             for _ in 0..self.time_res {
-                let mut analysis_out = vec![vec![Bin::new(0.0, 0.0); frame_size]; self.channels];
-                let mut synthesis_in = vec![vec![Bin::new(0.0, 0.0); frame_size]; self.channels];
+                let mut analysis_out =
+                    vec![vec![Bin::new(0.0, 0.0); self.frame_size]; self.channels];
+                let mut synthesis_in =
+                    vec![vec![Bin::new(0.0, 0.0); self.frame_size]; self.channels];
 
                 // ANALYSIS
                 for chan in 0..self.channels {
                     let samples = &self.in_buf[chan];
                     let mut last_phase = &mut self.last_phase[chan];
-                    let mut fft_in = vec![c64::new(0.0, 0.0); frame_size];
-                    let mut fft_out = vec![c64::new(0.0, 0.0); frame_size];
 
                     // read in
-                    for i in 0..frame_size {
-                        let window = window((i as f64) / (frame_size as f64));
+                    for i in 0..self.frame_size {
+                        let window = window((i as f64) / frame_sizef);
                         fft_in[i] = c64::new(samples[i] * window, 0.0);
                     }
 
                     self.forward_fft.process(&fft_in, &mut fft_out);
 
-                    for i in 0..frame_size {
+                    for i in 0..self.frame_size {
                         let x = fft_out[i];
 
                         let (amp, phase) = x.to_polar();
@@ -131,7 +156,7 @@ impl PhaseVocoder {
                             qpd -= qpd & 1;
                         }
                         tmp -= PI * (qpd as f64);
-                        tmp = (self.time_res as f64) * tmp / (2.0 * PI);
+                        tmp = time_resf * tmp / (2.0 * PI);
                         tmp = (i as f64) * freq_per_bin + tmp * freq_per_bin;
 
                         analysis_out[chan][i] = Bin::new(tmp, amp * 2.0);
@@ -139,21 +164,22 @@ impl PhaseVocoder {
                 }
 
                 // PROCESSING
-                processor(self.channels, frame_size, &analysis_out, &mut synthesis_in);
+                processor(self.channels,
+                          self.frame_size,
+                          &analysis_out,
+                          &mut synthesis_in);
 
                 // SYNTHESIS
                 for chan in 0..self.channels {
                     let mut sum_phase = &mut self.sum_phase[chan];
-                    let mut fft_in = vec![c64::new(0.0, 0.0); frame_size];
-                    let mut fft_out = vec![c64::new(0.0, 0.0); frame_size];
-                    for i in 0..frame_size {
+                    for i in 0..self.frame_size {
                         let amp = synthesis_in[chan][i].amp;
                         let mut tmp = synthesis_in[chan][i].freq;
 
                         // convert frequency to phase
                         tmp -= (i as f64) * freq_per_bin;
                         tmp /= freq_per_bin;
-                        tmp = 2.0 * PI * tmp / (self.time_res as f64);
+                        tmp = 2.0 * PI * tmp / time_resf;
                         tmp += (i as f64) * expect;
                         sum_phase[i] += tmp;
                         let phase = sum_phase[i];
@@ -164,18 +190,17 @@ impl PhaseVocoder {
                     self.backward_fft.process(&fft_in, &mut fft_out);
 
                     // accumulate
-                    for i in 0..frame_size {
-                        let window = window((i as f64) / (frame_size as f64));
+                    for i in 0..self.frame_size {
+                        let window = window((i as f64) / frame_sizef);
                         if i == self.output_accum[chan].len() {
                             self.output_accum[chan].push_back(0.0);
                         }
                         self.output_accum[chan][i] += window * fft_out[i].re /
-                                                      ((frame_size as f64) *
-                                                       (self.time_res as f64));
+                                                      (frame_sizef * time_resf);
                     }
 
                     // write out
-                    for _ in 0..step_size {
+                    for _ in 0..step_size as usize {
                         self.out_buf[chan].push_back(self.output_accum[chan].pop_front().unwrap());
                         self.in_buf[chan].pop_front();
                     }
