@@ -90,6 +90,14 @@ impl PhaseVocoder {
         self.frame_size
     }
 
+    pub fn time_res(&self) -> usize {
+        self.time_res
+    }
+
+    pub fn sample_rate(&self) -> usize {
+        self.sample_rate
+    }
+
     /// Reads samples from `input`, processes the samples, then resynthesizes as many samples as
     /// possible into `output`. Returns the number of samples written to `output`.
     ///
