@@ -128,8 +128,6 @@ impl PhaseVocoder {
             let frame_sizef = self.frame_size as f64;
             let time_resf = self.time_res as f64;
             let step_size = frame_sizef / time_resf;
-            let expect = 2.0 * PI * step_size / frame_sizef;
-            let freq_per_bin = self.sample_rate / frame_sizef;
             let mut fft_in = vec![c64::new(0.0, 0.0); self.frame_size];
             let mut fft_out = vec![c64::new(0.0, 0.0); self.frame_size];
 
@@ -141,37 +139,20 @@ impl PhaseVocoder {
 
                 // ANALYSIS
                 for chan in 0..self.channels {
-                    let samples = &self.in_buf[chan];
-                    let mut last_phase = &mut self.last_phase[chan];
-
                     // read in
                     for i in 0..self.frame_size {
                         let window = window((i as f64) / frame_sizef);
-                        fft_in[i] = c64::new(samples[i] * window, 0.0);
+                        fft_in[i] = c64::new(self.in_buf[chan][i] * window, 0.0);
                     }
 
                     self.forward_fft.process(&fft_in, &mut fft_out);
 
                     for i in 0..self.frame_size {
                         let x = fft_out[i];
-
                         let (amp, phase) = x.to_polar();
+                        let freq = self.phase_to_frequency(chan, i, phase);
 
-                        // convert phase to frequency
-                        let mut tmp = phase - last_phase[i];
-                        last_phase[i] = phase;
-                        tmp -= (i as f64) * expect;
-                        let mut qpd = (tmp / PI) as i32;
-                        if qpd >= 0 {
-                            qpd += qpd & 1;
-                        } else {
-                            qpd -= qpd & 1;
-                        }
-                        tmp -= PI * (qpd as f64);
-                        tmp = time_resf * tmp / (2.0 * PI);
-                        tmp = (i as f64) * freq_per_bin + tmp * freq_per_bin;
-
-                        analysis_out[chan][i] = Bin::new(tmp, amp * 2.0);
+                        analysis_out[chan][i] = Bin::new(freq, amp * 2.0);
                     }
                 }
 
@@ -183,18 +164,10 @@ impl PhaseVocoder {
 
                 // SYNTHESIS
                 for chan in 0..self.channels {
-                    let mut sum_phase = &mut self.sum_phase[chan];
                     for i in 0..self.frame_size {
                         let amp = synthesis_in[chan][i].amp;
-                        let mut tmp = synthesis_in[chan][i].freq;
-
-                        // convert frequency to phase
-                        tmp -= (i as f64) * freq_per_bin;
-                        tmp /= freq_per_bin;
-                        tmp = 2.0 * PI * tmp / time_resf;
-                        tmp += (i as f64) * expect;
-                        sum_phase[i] += tmp;
-                        let phase = sum_phase[i];
+                        let freq = synthesis_in[chan][i].freq;
+                        let phase = self.frequency_to_phase(chan, i, freq);
 
                         fft_in[i] = c64::from_polar(&amp, &phase);
                     }
@@ -233,6 +206,41 @@ impl PhaseVocoder {
             }
         }
         n_written / self.channels
+    }
+
+    fn phase_to_frequency(&mut self, channel: usize, bin: usize, phase: f64) -> f64 {
+        let frame_sizef = self.frame_size as f64;
+        let freq_per_bin = self.sample_rate / frame_sizef;
+        let time_resf = self.time_res as f64;
+        let step_size = frame_sizef / time_resf;
+        let expect = 2.0 * PI * step_size / frame_sizef;
+        let mut tmp = phase - self.last_phase[channel][bin];
+        self.last_phase[channel][bin] = phase;
+        tmp -= (bin as f64) * expect;
+        let mut qpd = (tmp / PI) as i32;
+        if qpd >= 0 {
+            qpd += qpd & 1;
+        } else {
+            qpd -= qpd & 1;
+        }
+        tmp -= PI * (qpd as f64);
+        tmp = time_resf * tmp / (2.0 * PI);
+        tmp = (bin as f64) * freq_per_bin + tmp * freq_per_bin;
+        tmp
+    }
+
+    fn frequency_to_phase(&mut self, channel: usize, bin: usize, freq: f64) -> f64 {
+        let frame_sizef = self.frame_size as f64;
+        let freq_per_bin = self.sample_rate / frame_sizef;
+        let time_resf = self.time_res as f64;
+        let step_size = frame_sizef / time_resf;
+        let expect = 2.0 * PI * step_size / frame_sizef;
+        let mut tmp = freq - (bin as f64) * freq_per_bin;
+        tmp /= freq_per_bin;
+        tmp = 2.0 * PI * tmp / time_resf;
+        tmp += (bin as f64) * expect;
+        self.sum_phase[channel][bin] += tmp;
+        self.sum_phase[channel][bin]
     }
 }
 
