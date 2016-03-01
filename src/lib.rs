@@ -94,7 +94,7 @@ impl PhaseVocoder {
         self.time_res
     }
 
-    pub fn sample_rate(&self) -> usize {
+    pub fn sample_rate(&self) -> f64 {
         self.sample_rate
     }
 
