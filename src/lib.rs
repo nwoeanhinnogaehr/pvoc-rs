@@ -1,5 +1,6 @@
 extern crate rustfft;
 extern crate num;
+extern crate apodize;
 
 use std::f64::consts::PI;
 use std::collections::VecDeque;
@@ -42,6 +43,8 @@ pub struct PhaseVocoder {
 
     forward_fft: rustfft::FFT<f64>,
     backward_fft: rustfft::FFT<f64>,
+
+    window: Vec<f64>,
 }
 
 impl PhaseVocoder {
@@ -79,6 +82,8 @@ impl PhaseVocoder {
 
             forward_fft: rustfft::FFT::new(frame_size, false),
             backward_fft: rustfft::FFT::new(frame_size, true),
+
+            window: apodize::nuttall_iter(frame_size).collect(),
         }
     }
 
@@ -141,8 +146,7 @@ impl PhaseVocoder {
                 for chan in 0..self.channels {
                     // read in
                     for i in 0..self.frame_size {
-                        let window = window((i as f64) / frame_sizef);
-                        fft_in[i] = c64::new(self.in_buf[chan][i] * window, 0.0);
+                        fft_in[i] = c64::new(self.in_buf[chan][i] * self.window[i], 0.0);
                     }
 
                     self.forward_fft.process(&fft_in, &mut fft_out);
@@ -176,11 +180,10 @@ impl PhaseVocoder {
 
                     // accumulate
                     for i in 0..self.frame_size {
-                        let window = window((i as f64) / frame_sizef);
                         if i == self.output_accum[chan].len() {
                             self.output_accum[chan].push_back(0.0);
                         }
-                        self.output_accum[chan][i] += window * fft_out[i].re /
+                        self.output_accum[chan][i] += self.window[i] * fft_out[i].re /
                                                       (frame_sizef * time_resf);
                     }
 
