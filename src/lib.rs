@@ -23,6 +23,12 @@ impl Bin {
             amp: amp,
         }
     }
+    pub fn empty() -> Bin {
+        Bin {
+            freq: 0.0,
+            amp: 0.0,
+        }
+    }
 }
 
 /// A phase vocoder.
@@ -137,10 +143,8 @@ impl PhaseVocoder {
             let mut fft_out = vec![c64::new(0.0, 0.0); self.frame_size];
 
             for _ in 0..self.time_res {
-                let mut analysis_out =
-                    vec![vec![Bin::new(0.0, 0.0); self.frame_size]; self.channels];
-                let mut synthesis_in =
-                    vec![vec![Bin::new(0.0, 0.0); self.frame_size]; self.channels];
+                let mut analysis_out = vec![vec![Bin::empty(); self.frame_size]; self.channels];
+                let mut synthesis_in = vec![vec![Bin::empty(); self.frame_size]; self.channels];
 
                 // ANALYSIS
                 for chan in 0..self.channels {
@@ -245,8 +249,4 @@ impl PhaseVocoder {
         self.sum_phase[channel][bin] += tmp;
         self.sum_phase[channel][bin]
     }
-}
-
-fn window(x: f64) -> f64 {
-    -0.5 * (2.0 * PI * x).cos() + 0.5
 }
