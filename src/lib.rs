@@ -89,7 +89,7 @@ impl PhaseVocoder {
             forward_fft: rustfft::FFT::new(frame_size, false),
             backward_fft: rustfft::FFT::new(frame_size, true),
 
-            window: apodize::nuttall_iter(frame_size).collect(),
+            window: apodize::hanning_iter(frame_size).collect(),
         }
     }
 
