@@ -9,6 +9,5 @@ keywords = ["audio", "fft", "dsp", "fourier"]
 license = "GPL-3.0"
 
 [dependencies]
-rustfft = "1.0.1"
-num = "0.1.32"
-apodize = "0.2.0"
+rustfft = "3.0.1"
+apodize = "1.0.0"

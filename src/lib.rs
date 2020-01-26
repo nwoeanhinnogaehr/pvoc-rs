@@ -1,10 +1,12 @@
 extern crate rustfft;
-extern crate num;
 extern crate apodize;
 
 use std::f64::consts::PI;
+use std::sync::Arc;
 use std::collections::VecDeque;
-use num::{Float, Complex, FromPrimitive, ToPrimitive};
+// use num::{Float, Complex, FromPrimitive, ToPrimitive};
+use rustfft::num_complex::Complex;
+use rustfft::num_traits::{Float, FromPrimitive, ToPrimitive};
 
 #[allow(non_camel_case_types)]
 type c64 = Complex<f64>;
@@ -47,8 +49,8 @@ pub struct PhaseVocoder {
     sum_phase: Vec<Vec<f64>>,
     output_accum: Vec<VecDeque<f64>>,
 
-    forward_fft: rustfft::FFT<f64>,
-    backward_fft: rustfft::FFT<f64>,
+    forward_fft: Arc<dyn rustfft::FFT<f64>>,
+    backward_fft: Arc<dyn rustfft::FFT<f64>>,
 
     window: Vec<f64>,
 }
@@ -73,6 +75,9 @@ impl PhaseVocoder {
         if frame_size == 0 {
             frame_size = time_res;
         }
+        let mut planner_forward = rustfft::FFTplanner::new(false);
+        let mut planner_backward = rustfft::FFTplanner::new(true);
+        
         PhaseVocoder {
             channels: channels,
             sample_rate: sample_rate,
@@ -86,8 +91,8 @@ impl PhaseVocoder {
             sum_phase: vec![vec![0.0; frame_size]; channels],
             output_accum: vec![VecDeque::new(); channels],
 
-            forward_fft: rustfft::FFT::new(frame_size, false),
-            backward_fft: rustfft::FFT::new(frame_size, true),
+            forward_fft: planner_forward.plan_fft(frame_size),
+            backward_fft: planner_backward.plan_fft(frame_size),
 
             window: apodize::hanning_iter(frame_size).collect(),
         }
@@ -153,7 +158,7 @@ impl PhaseVocoder {
                         fft_in[i] = c64::new(self.in_buf[chan][i] * self.window[i], 0.0);
                     }
 
-                    self.forward_fft.process(&fft_in, &mut fft_out);
+                    self.forward_fft.process(&mut fft_in, &mut fft_out);
 
                     for i in 0..self.frame_size {
                         let x = fft_out[i];
@@ -183,7 +188,7 @@ impl PhaseVocoder {
                         fft_in[i] = c64::from_polar(&amp, &phase);
                     }
 
-                    self.backward_fft.process(&fft_in, &mut fft_out);
+                    self.backward_fft.process(&mut fft_in, &mut fft_out);
 
                     // accumulate
                     for i in 0..self.frame_size {
