@@ -1,10 +1,10 @@
-extern crate rustfft;
 extern crate apodize;
+extern crate rustfft;
 
+
+use std::collections::VecDeque;
 use std::f64::consts::PI;
 use std::sync::Arc;
-use std::collections::VecDeque;
-// use num::{Float, Complex, FromPrimitive, ToPrimitive};
 use rustfft::num_complex::Complex;
 use rustfft::num_traits::{Float, FromPrimitive, ToPrimitive};
 
@@ -66,18 +66,19 @@ impl PhaseVocoder {
     /// performance. Will be rounded to a multiple of `time_res`.
     ///
     /// `time_res` is the number of frames to overlap.
-    pub fn new(channels: usize,
-               sample_rate: f64,
-               frame_size: usize,
-               time_res: usize)
-               -> PhaseVocoder {
+    pub fn new(
+        channels: usize,
+        sample_rate: f64,
+        frame_size: usize,
+        time_res: usize,
+    ) -> PhaseVocoder {
         let mut frame_size = frame_size / time_res * time_res;
         if frame_size == 0 {
             frame_size = time_res;
         }
         let mut planner_forward = rustfft::FFTplanner::new(false);
         let mut planner_backward = rustfft::FFTplanner::new(true);
-        
+
         PhaseVocoder {
             channels: channels,
             sample_rate: sample_rate,
@@ -122,13 +123,15 @@ impl PhaseVocoder {
     /// `synthesis_input`.
     ///
     /// Samples are expected to be normalized to the range [-1, 1].
-    pub fn process<S, F>(&mut self,
-                         input: &[&[S]],
-                         output: &mut [&mut [S]],
-                         mut processor: F)
-                         -> usize
-        where S: Float + ToPrimitive + FromPrimitive,
-              F: FnMut(usize, usize, &[Vec<Bin>], &mut [Vec<Bin>])
+    pub fn process<S, F>(
+        &mut self,
+        input: &[&[S]],
+        output: &mut [&mut [S]],
+        mut processor: F,
+    ) -> usize
+    where
+        S: Float + ToPrimitive + FromPrimitive,
+        F: FnMut(usize, usize, &[Vec<Bin>], &mut [Vec<Bin>]),
     {
         assert_eq!(input.len(), self.channels);
         assert_eq!(output.len(), self.channels);
@@ -171,10 +174,12 @@ impl PhaseVocoder {
                 }
 
                 // PROCESSING
-                processor(self.channels,
-                          self.frame_size,
-                          &analysis_out,
-                          &mut synthesis_in);
+                processor(
+                    self.channels,
+                    self.frame_size,
+                    &analysis_out,
+                    &mut synthesis_in,
+                );
 
                 // SYNTHESIS
                 for chan in 0..self.channels {
@@ -195,8 +200,8 @@ impl PhaseVocoder {
                         if i == self.output_accum[chan].len() {
                             self.output_accum[chan].push_back(0.0);
                         }
-                        self.output_accum[chan][i] += self.window[i] * fft_out[i].re /
-                                                      (frame_sizef * time_resf);
+                        self.output_accum[chan][i] +=
+                            self.window[i] * fft_out[i].re / (frame_sizef * time_resf);
                     }
 
                     // write out
