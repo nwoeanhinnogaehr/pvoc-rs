@@ -1,5 +1,8 @@
 extern crate apodize;
 extern crate rustfft;
+#[cfg(test)]
+#[macro_use]
+extern crate approx;
 
 
 use std::collections::VecDeque;
@@ -260,4 +263,31 @@ impl PhaseVocoder {
         tmp += (bin as f64) * expect;
         tmp
     }
+}
+
+#[test]
+fn identity_function_does_not_change_data() {
+    let mut pvoc = PhaseVocoder::new(1, 44100.0, 256, 4);
+    let input_len = 2048;
+    let mut input_samples = vec![0.0; input_len];
+    for i in 0 .. input_len {
+        if i < input_len / 2 {
+            input_samples[i] = (i as f32) / ((input_len / 2) as f32)
+        } else {
+            input_samples[i] = 2.0 - (i as f32) / ((input_len / 2) as f32);
+        }
+    }
+    let mut output_samples = vec![0.0; input_len];
+    pvoc.process(
+        &[&input_samples],
+        &mut [&mut output_samples],
+        |channels: usize, bins: usize, input: &[Vec<Bin>], output: &mut [Vec<Bin>]| {
+            for i in 0..channels {
+                for j in 0..bins {
+                    output[i][j] = input[i][j];
+                }
+            }
+        },
+    );
+    println!("{:?}", output_samples);
 }
