@@ -98,7 +98,7 @@ impl PhaseVocoder {
             forward_fft: planner_forward.plan_fft(frame_size),
             backward_fft: planner_backward.plan_fft(frame_size),
 
-            window: apodize::hanning_iter(frame_size).collect(),
+            window: apodize::hanning_iter(frame_size).map(|x| x.sqrt()).collect(),
         }
     }
 
@@ -141,12 +141,25 @@ impl PhaseVocoder {
 
         // push samples to input queue
         for chan in 0..input.len() {
+            // Zero pre-padding.
+            for _ in 0..self.frame_size {
+                self.in_buf[chan].push_back(0.0);
+                self.samples_waiting += 1;
+            }
+            
             for samp in 0..input[chan].len() {
                 self.in_buf[chan].push_back(input[chan][samp].to_f64().unwrap());
                 self.samples_waiting += 1;
             }
+            
+            // Zero post-padding
+            for _ in 0..self.frame_size {
+                self.in_buf[chan].push_back(0.0);
+                self.samples_waiting += 1;
+            }            
         }
-        while self.samples_waiting >= 2 * self.frame_size * self.channels {
+        
+        while self.samples_waiting > self.frame_size * self.channels {
             let frame_sizef = self.frame_size as f64;
             let time_resf = self.time_res as f64;
             let step_size = frame_sizef / time_resf;
@@ -220,6 +233,9 @@ impl PhaseVocoder {
         // pop samples from output queue
         let mut n_written = 0;
         for chan in 0..self.channels {
+            for _ in 0 ..self.frame_size {
+                self.out_buf[chan].pop_front();
+            }
             for samp in 0..output[chan].len() {
                 output[chan][samp] = match self.out_buf[chan].pop_front() {
                     Some(x) => FromPrimitive::from_f64(x).unwrap(),
@@ -268,7 +284,7 @@ impl PhaseVocoder {
 #[test]
 fn identity_function_does_not_change_data() {
     let mut pvoc = PhaseVocoder::new(1, 44100.0, 256, 4);
-    let input_len = 2048;
+    let input_len = 1024;
     let mut input_samples = vec![0.0; input_len];
     for i in 0 .. input_len {
         if i < input_len / 2 {
@@ -289,5 +305,7 @@ fn identity_function_does_not_change_data() {
             }
         },
     );
-    println!("{:?}", output_samples);
-}
+    for i in 0 .. input_len {
+        assert_ulps_eq!(input_samples[i], output_samples[i], epsilon = 1e-2);
+    }
+} 
