@@ -1,10 +1,12 @@
-extern crate rustfft;
-extern crate num;
 extern crate apodize;
+extern crate rustfft;
 
-use std::f64::consts::PI;
+
 use std::collections::VecDeque;
-use num::{Float, Complex, FromPrimitive, ToPrimitive};
+use std::f64::consts::PI;
+use std::sync::Arc;
+use rustfft::num_complex::Complex;
+use rustfft::num_traits::{Float, FromPrimitive, ToPrimitive};
 
 #[allow(non_camel_case_types)]
 type c64 = Complex<f64>;
@@ -47,8 +49,8 @@ pub struct PhaseVocoder {
     sum_phase: Vec<Vec<f64>>,
     output_accum: Vec<VecDeque<f64>>,
 
-    forward_fft: rustfft::FFT<f64>,
-    backward_fft: rustfft::FFT<f64>,
+    forward_fft: Arc<dyn rustfft::FFT<f64>>,
+    backward_fft: Arc<dyn rustfft::FFT<f64>>,
 
     window: Vec<f64>,
 }
@@ -64,15 +66,19 @@ impl PhaseVocoder {
     /// performance. Will be rounded to a multiple of `time_res`.
     ///
     /// `time_res` is the number of frames to overlap.
-    pub fn new(channels: usize,
-               sample_rate: f64,
-               frame_size: usize,
-               time_res: usize)
-               -> PhaseVocoder {
+    pub fn new(
+        channels: usize,
+        sample_rate: f64,
+        frame_size: usize,
+        time_res: usize,
+    ) -> PhaseVocoder {
         let mut frame_size = frame_size / time_res * time_res;
         if frame_size == 0 {
             frame_size = time_res;
         }
+        let mut planner_forward = rustfft::FFTplanner::new(false);
+        let mut planner_backward = rustfft::FFTplanner::new(true);
+
         PhaseVocoder {
             channels: channels,
             sample_rate: sample_rate,
@@ -86,8 +92,8 @@ impl PhaseVocoder {
             sum_phase: vec![vec![0.0; frame_size]; channels],
             output_accum: vec![VecDeque::new(); channels],
 
-            forward_fft: rustfft::FFT::new(frame_size, false),
-            backward_fft: rustfft::FFT::new(frame_size, true),
+            forward_fft: planner_forward.plan_fft(frame_size),
+            backward_fft: planner_backward.plan_fft(frame_size),
 
             window: apodize::hanning_iter(frame_size).collect(),
         }
@@ -117,13 +123,15 @@ impl PhaseVocoder {
     /// `synthesis_input`.
     ///
     /// Samples are expected to be normalized to the range [-1, 1].
-    pub fn process<S, F>(&mut self,
-                         input: &[&[S]],
-                         output: &mut [&mut [S]],
-                         mut processor: F)
-                         -> usize
-        where S: Float + ToPrimitive + FromPrimitive,
-              F: FnMut(usize, usize, &[Vec<Bin>], &mut [Vec<Bin>])
+    pub fn process<S, F>(
+        &mut self,
+        input: &[&[S]],
+        output: &mut [&mut [S]],
+        mut processor: F,
+    ) -> usize
+    where
+        S: Float + ToPrimitive + FromPrimitive,
+        F: FnMut(usize, usize, &[Vec<Bin>], &mut [Vec<Bin>]),
     {
         assert_eq!(input.len(), self.channels);
         assert_eq!(output.len(), self.channels);
@@ -153,7 +161,7 @@ impl PhaseVocoder {
                         fft_in[i] = c64::new(self.in_buf[chan][i] * self.window[i], 0.0);
                     }
 
-                    self.forward_fft.process(&fft_in, &mut fft_out);
+                    self.forward_fft.process(&mut fft_in, &mut fft_out);
 
                     for i in 0..self.frame_size {
                         let x = fft_out[i];
@@ -166,10 +174,12 @@ impl PhaseVocoder {
                 }
 
                 // PROCESSING
-                processor(self.channels,
-                          self.frame_size,
-                          &analysis_out,
-                          &mut synthesis_in);
+                processor(
+                    self.channels,
+                    self.frame_size,
+                    &analysis_out,
+                    &mut synthesis_in,
+                );
 
                 // SYNTHESIS
                 for chan in 0..self.channels {
@@ -183,15 +193,15 @@ impl PhaseVocoder {
                         fft_in[i] = c64::from_polar(&amp, &phase);
                     }
 
-                    self.backward_fft.process(&fft_in, &mut fft_out);
+                    self.backward_fft.process(&mut fft_in, &mut fft_out);
 
                     // accumulate
                     for i in 0..self.frame_size {
                         if i == self.output_accum[chan].len() {
                             self.output_accum[chan].push_back(0.0);
                         }
-                        self.output_accum[chan][i] += self.window[i] * fft_out[i].re /
-                                                      (frame_sizef * time_resf);
+                        self.output_accum[chan][i] +=
+                            self.window[i] * fft_out[i].re / (frame_sizef * time_resf);
                     }
 
                     // write out
