@@ -292,7 +292,7 @@ impl PhaseVocoder {
 }
 
 #[test]
-fn identity_transform_reconstructs_original_data() {
+fn identity_transform_reconstructs_original_data_hat_function() {
     let mut pvoc = PhaseVocoder::new(1, 44100.0, 256, 256 / 4);
     let input_len = 1024;
     let mut input_samples = vec![0.0; input_len];
@@ -317,6 +317,30 @@ fn identity_transform_reconstructs_original_data() {
     );
     assert_ulps_eq!(
         input_samples.as_slice(),
+        output_samples.as_slice(),
+        epsilon = 1e-2
+    );
+}
+
+#[test]
+fn identity_transform_reconstructs_original_data_random_data() {
+    let mut pvoc = PhaseVocoder::new(1, 44100.0, 256, 256 / 4);
+    let input_len = 1024;
+    let input_samples = include!("./random_test_data.rs");
+    let mut output_samples = vec![0.0; input_len];
+    pvoc.process(
+        &[&input_samples],
+        &mut [&mut output_samples],
+        |channels: usize, bins: usize, input: &[Vec<Bin>], output: &mut [Vec<Bin>]| {
+            for i in 0..channels {
+                for j in 0..bins {
+                    output[i][j] = input[i][j];
+                }
+            }
+        },
+    );
+    assert_ulps_eq!(
+        &input_samples[..],
         output_samples.as_slice(),
         epsilon = 1e-2
     );
