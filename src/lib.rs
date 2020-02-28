@@ -4,12 +4,11 @@ extern crate rustfft;
 #[macro_use]
 extern crate approx;
 
-
+use rustfft::num_complex::Complex;
+use rustfft::num_traits::{Float, FromPrimitive, ToPrimitive};
 use std::collections::VecDeque;
 use std::f64::consts::PI;
 use std::sync::Arc;
-use rustfft::num_complex::Complex;
-use rustfft::num_traits::{Float, FromPrimitive, ToPrimitive};
 
 #[allow(non_camel_case_types)]
 type c64 = Complex<f64>;
@@ -65,10 +64,14 @@ impl PhaseVocoder {
     ///
     /// `sample_rate` is the sample rate.
     ///
-    /// `frame_size` is the fourier transform size. This should be a power of 2 for optimal
-    /// performance. Will be rounded to a multiple of `time_res`.
+    /// `frame_size` is the fourier transform size. It must be `> 1`.
+    /// For optimal computation speed, this should be a power of 2.
+    /// Will be rounded to a multiple of `time_res`.
     ///
     /// `time_res` is the number of frames to overlap.
+    ///
+    /// # Panics
+    /// Panics if `frame_size` is `<= 1` after rounding.
     pub fn new(
         channels: usize,
         sample_rate: f64,
@@ -79,6 +82,10 @@ impl PhaseVocoder {
         if frame_size == 0 {
             frame_size = time_res;
         }
+
+        // If `frame_size == 1`, computing the window would panic.
+        assert!(frame_size > 1);
+
         let mut planner_forward = rustfft::FFTplanner::new(false);
         let mut planner_backward = rustfft::FFTplanner::new(true);
 
@@ -98,7 +105,9 @@ impl PhaseVocoder {
             forward_fft: planner_forward.plan_fft(frame_size),
             backward_fft: planner_backward.plan_fft(frame_size),
 
-            window: apodize::hanning_iter(frame_size).map(|x| x.sqrt()).collect(),
+            window: apodize::hanning_iter(frame_size)
+                .map(|x| x.sqrt())
+                .collect(),
         }
     }
 
@@ -146,19 +155,19 @@ impl PhaseVocoder {
                 self.in_buf[chan].push_back(0.0);
                 self.samples_waiting += 1;
             }
-            
+
             for samp in 0..input[chan].len() {
                 self.in_buf[chan].push_back(input[chan][samp].to_f64().unwrap());
                 self.samples_waiting += 1;
             }
-            
+
             // Zero post-padding
             for _ in 0..self.frame_size {
                 self.in_buf[chan].push_back(0.0);
                 self.samples_waiting += 1;
-            }            
+            }
         }
-        
+
         while self.samples_waiting > self.frame_size * self.channels {
             let frame_sizef = self.frame_size as f64;
             let time_resf = self.time_res as f64;
@@ -233,7 +242,8 @@ impl PhaseVocoder {
         // pop samples from output queue
         let mut n_written = 0;
         for chan in 0..self.channels {
-            for _ in 0 ..self.frame_size {
+            // Ignore the zeroes at the start (result of the padding)
+            for _ in 0..self.frame_size {
                 self.out_buf[chan].pop_front();
             }
             for samp in 0..output[chan].len() {
@@ -282,11 +292,11 @@ impl PhaseVocoder {
 }
 
 #[test]
-fn identity_function_does_not_change_data() {
-    let mut pvoc = PhaseVocoder::new(1, 44100.0, 256, 4);
+fn identity_transform_reconstructs_original_data() {
+    let mut pvoc = PhaseVocoder::new(1, 44100.0, 256, 256 / 4);
     let input_len = 1024;
     let mut input_samples = vec![0.0; input_len];
-    for i in 0 .. input_len {
+    for i in 0..input_len {
         if i < input_len / 2 {
             input_samples[i] = (i as f32) / ((input_len / 2) as f32)
         } else {
@@ -305,7 +315,28 @@ fn identity_function_does_not_change_data() {
             }
         },
     );
-    for i in 0 .. input_len {
-        assert_ulps_eq!(input_samples[i], output_samples[i], epsilon = 1e-2);
-    }
-} 
+    assert_ulps_eq!(
+        input_samples.as_slice(),
+        output_samples.as_slice(),
+        epsilon = 1e-2
+    );
+}
+
+#[test]
+fn process_works_with_sample_res_equal_to_window() {
+    let mut pvoc = PhaseVocoder::new(1, 44100.0, 256, 256);
+    let input_len = 1024;
+    let input_samples = vec![0.0; input_len];
+    let mut output_samples = vec![0.0; input_len];
+    pvoc.process(
+        &[&input_samples],
+        &mut [&mut output_samples],
+        |channels: usize, bins: usize, input: &[Vec<Bin>], output: &mut [Vec<Bin>]| {
+            for i in 0..channels {
+                for j in 0..bins {
+                    output[i][j] = input[i][j];
+                }
+            }
+        },
+    );
+}
