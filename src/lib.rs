@@ -128,13 +128,23 @@ impl PhaseVocoder {
     }
 
     /// Reads samples from `input`, processes the samples, then resynthesizes as many samples as
-    /// possible into `output`. Returns the number of samples written to `output`.
+    /// possible into `output`. Returns the number of frames written to `output`.
     ///
     /// `processor` is a function to manipulate the spectrum before it is resynthesized. Its
     /// arguments are respectively `num_channels`, `num_bins`, `analysis_output` and
     /// `synthesis_input`.
     ///
     /// Samples are expected to be normalized to the range [-1, 1].
+    ///
+    /// This method can be called multiple times on the same `PhaseVocoder`.
+    /// If this happens, in the analysis step, it will be assumed that the `input` is a continuation
+    /// of the `input` that was passed during the previous call.
+    ///
+    /// It is possible that not enough data is available yet to fill `output` completely.
+    /// In that case, only the first frames of `output` will be written to.
+    /// Conversely, if there is more data available than `output` can hold, the remaining
+    /// output is kept in the `PhaseVocoder` and can be retrieved with another call to
+    /// `process` when more input data is available.
     pub fn process<S, F>(
         &mut self,
         input: &[&[S]],
@@ -150,20 +160,8 @@ impl PhaseVocoder {
 
         // push samples to input queue
         for chan in 0..input.len() {
-            // Zero pre-padding.
-            for _ in 0..self.frame_size {
-                self.in_buf[chan].push_back(0.0);
-                self.samples_waiting += 1;
-            }
-
             for samp in 0..input[chan].len() {
                 self.in_buf[chan].push_back(input[chan][samp].to_f64().unwrap());
-                self.samples_waiting += 1;
-            }
-
-            // Zero post-padding
-            for _ in 0..self.frame_size {
-                self.in_buf[chan].push_back(0.0);
                 self.samples_waiting += 1;
             }
         }
@@ -242,10 +240,6 @@ impl PhaseVocoder {
         // pop samples from output queue
         let mut n_written = 0;
         for chan in 0..self.channels {
-            // Ignore the zeroes at the start (result of the padding)
-            for _ in 0..self.frame_size {
-                self.out_buf[chan].pop_front();
-            }
             for samp in 0..output[chan].len() {
                 output[chan][samp] = match self.out_buf[chan].pop_front() {
                     Some(x) => FromPrimitive::from_f64(x).unwrap(),
@@ -291,9 +285,38 @@ impl PhaseVocoder {
     }
 }
 
+#[cfg(test)]
+fn identity(channels: usize, bins: usize, input: &[Vec<Bin>], output: &mut [Vec<Bin>]) {
+    for i in 0..channels {
+        for j in 0..bins {
+            output[i][j] = input[i][j];
+        }
+    }
+}
+
+#[cfg(test)]
+fn test_data_is_reconstructed(mut pvoc: PhaseVocoder, input_samples: &[f32]) {
+    let mut output_samples = vec![0.0; input_samples.len()];
+    let frame_size = pvoc.num_bins();
+    // Pre-padding, not collecting any output.
+    pvoc.process(&[&vec![0.0; frame_size]], &mut [&mut Vec::new()], identity);
+    // The data-itself, collecting some output that we will discard
+    let mut scratch = vec![0.0; frame_size];
+    pvoc.process(&[&input_samples], &mut [&mut scratch], identity);
+    // Post-padding and collecting all output
+    pvoc.process(
+        &[&vec![0.0; frame_size]],
+        &mut [&mut output_samples],
+        identity,
+    );
+
+    assert_ulps_eq!(input_samples, output_samples.as_slice(), epsilon = 1e-2);
+}
+
 #[test]
 fn identity_transform_reconstructs_original_data_hat_function() {
-    let mut pvoc = PhaseVocoder::new(1, 44100.0, 256, 256 / 4);
+    let window_len = 256;
+    let pvoc = PhaseVocoder::new(1, 44100.0, window_len, window_len / 4);
     let input_len = 1024;
     let mut input_samples = vec![0.0; input_len];
     for i in 0..input_len {
@@ -303,47 +326,15 @@ fn identity_transform_reconstructs_original_data_hat_function() {
             input_samples[i] = 2.0 - (i as f32) / ((input_len / 2) as f32);
         }
     }
-    let mut output_samples = vec![0.0; input_len];
-    pvoc.process(
-        &[&input_samples],
-        &mut [&mut output_samples],
-        |channels: usize, bins: usize, input: &[Vec<Bin>], output: &mut [Vec<Bin>]| {
-            for i in 0..channels {
-                for j in 0..bins {
-                    output[i][j] = input[i][j];
-                }
-            }
-        },
-    );
-    assert_ulps_eq!(
-        input_samples.as_slice(),
-        output_samples.as_slice(),
-        epsilon = 1e-2
-    );
+
+    test_data_is_reconstructed(pvoc, input_samples.as_slice());
 }
 
 #[test]
 fn identity_transform_reconstructs_original_data_random_data() {
-    let mut pvoc = PhaseVocoder::new(1, 44100.0, 256, 256 / 4);
-    let input_len = 1024;
+    let pvoc = PhaseVocoder::new(1, 44100.0, 256, 256 / 4);
     let input_samples = include!("./random_test_data.rs");
-    let mut output_samples = vec![0.0; input_len];
-    pvoc.process(
-        &[&input_samples],
-        &mut [&mut output_samples],
-        |channels: usize, bins: usize, input: &[Vec<Bin>], output: &mut [Vec<Bin>]| {
-            for i in 0..channels {
-                for j in 0..bins {
-                    output[i][j] = input[i][j];
-                }
-            }
-        },
-    );
-    assert_ulps_eq!(
-        &input_samples[..],
-        output_samples.as_slice(),
-        epsilon = 1e-2
-    );
+    test_data_is_reconstructed(pvoc, &input_samples);
 }
 
 #[test]
