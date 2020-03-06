@@ -166,7 +166,7 @@ impl PhaseVocoder {
             }
         }
 
-        while self.samples_waiting > self.frame_size * self.channels {
+        while self.samples_waiting >= 2 * self.frame_size * self.channels {
             let frame_sizef = self.frame_size as f64;
             let time_resf = self.time_res as f64;
             let step_size = frame_sizef / time_resf;
@@ -343,15 +343,20 @@ fn process_works_with_sample_res_equal_to_window() {
     let input_len = 1024;
     let input_samples = vec![0.0; input_len];
     let mut output_samples = vec![0.0; input_len];
-    pvoc.process(
-        &[&input_samples],
-        &mut [&mut output_samples],
-        |channels: usize, bins: usize, input: &[Vec<Bin>], output: &mut [Vec<Bin>]| {
-            for i in 0..channels {
-                for j in 0..bins {
-                    output[i][j] = input[i][j];
-                }
-            }
-        },
-    );
+    pvoc.process(&[&input_samples], &mut [&mut output_samples], identity);
+}
+
+#[test]
+fn process_works_when_reading_sample_by_sample() {
+    let mut pvoc = PhaseVocoder::new(1, 44100.0, 8, 2);
+    let input_len = 32;
+    let input_samples = vec![0.0; input_len];
+    let mut output_samples = vec![0.0; input_len];
+    for i in 0..input_samples.len() {
+        pvoc.process(
+            &[&input_samples[dbg!(i)..i + 1]],
+            &mut [&mut output_samples],
+            identity,
+        );
+    }
 }
