@@ -228,7 +228,7 @@ impl PhaseVocoder {
                     for i in 0..self.frame_size {
                         let amp = self.synthesis_in[chan][i].amp;
                         let freq = self.synthesis_in[chan][i].freq;
-                        let phase = self.frequency_to_phase(i, freq);
+                        let phase = self.frequency_to_phase(freq);
                         self.sum_phase[chan][i] += phase;
                         let phase = self.sum_phase[chan][i];
 
@@ -291,17 +291,9 @@ impl PhaseVocoder {
         tmp
     }
 
-    pub fn frequency_to_phase(&self, bin: usize, freq: f64) -> f64 {
-        let frame_sizef = self.frame_size as f64;
-        let freq_per_bin = self.sample_rate / frame_sizef;
-        let time_resf = self.time_res as f64;
-        let step_size = frame_sizef / time_resf;
-        let expect = 2.0 * PI * step_size / frame_sizef;
-        let mut tmp = freq - (bin as f64) * freq_per_bin;
-        tmp /= freq_per_bin;
-        tmp = 2.0 * PI * tmp / time_resf;
-        tmp += (bin as f64) * expect;
-        tmp
+    pub fn frequency_to_phase(&self, freq: f64) -> f64 {
+        let step_size = self.frame_size as f64 / self.time_res as f64;
+        2.0 * PI * freq / self.sample_rate * step_size
     }
 }
 
