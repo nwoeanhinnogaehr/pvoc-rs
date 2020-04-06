@@ -35,19 +35,130 @@ impl Bin {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct PhaseVocoderSettings {
+    sample_rate: f64,
+    frame_size: usize,
+    time_res: usize,
+}
+
+impl PhaseVocoderSettings {
+    fn new(sample_rate: f64, frame_size: usize, time_res: usize) -> Self {
+        let mut frame_size = frame_size / time_res * time_res;
+        if frame_size == 0 {
+            frame_size = time_res;
+        }
+
+        // If `frame_size == 1`, computing the window would panic.
+        assert!(frame_size > 1);
+
+        PhaseVocoderSettings {
+            sample_rate,
+            frame_size,
+            time_res,
+        }
+    }
+
+    fn phase_to_frequency(&self, bin: usize, phase: f64) -> f64 {
+        let frame_sizef = self.frame_size as f64;
+        let freq_per_bin = self.sample_rate / frame_sizef;
+        let time_resf = self.time_res as f64;
+        let step_size = frame_sizef / time_resf;
+        let expect = 2.0 * PI * step_size / frame_sizef;
+        let mut tmp = phase;
+        tmp -= (bin as f64) * expect;
+        let mut qpd = (tmp / PI) as i32;
+        if qpd >= 0 {
+            qpd += qpd & 1;
+        } else {
+            qpd -= qpd & 1;
+        }
+        tmp -= PI * (qpd as f64);
+        tmp = time_resf * tmp / (2.0 * PI);
+        tmp = (bin as f64) * freq_per_bin + tmp * freq_per_bin;
+        tmp
+    }
+
+    fn frequency_to_phase(&self, freq: f64) -> f64 {
+        let step_size = self.frame_size as f64 / self.time_res as f64;
+        2.0 * PI * freq / self.sample_rate * step_size
+    }
+
+    pub fn stepsize(&self) -> usize {
+        self.frame_size / self.time_res
+    }
+}
+
+pub struct PhaseVocoderAnalysis {
+    settings: PhaseVocoderSettings,
+    in_buf: VecDeque<f64>,
+    last_phase: Vec<f64>,
+}
+
+impl PhaseVocoderAnalysis {
+    pub fn new(sample_rate: f64, frame_size: usize, time_res: usize) -> Self {
+        Self::from_settings(PhaseVocoderSettings::new(sample_rate, frame_size, time_res))
+    }
+
+    fn from_settings(settings: PhaseVocoderSettings) -> Self {
+        Self {
+            settings,
+            in_buf: VecDeque::new(),
+            last_phase: vec![0.0; settings.frame_size],
+        }
+    }
+
+    pub fn push_samples<S: Float + ToPrimitive + FromPrimitive>(&mut self, samples: &[S]) {
+        for sample in samples.iter() {
+            self.in_buf.push_back(sample.to_f64().unwrap());
+        }
+    }
+
+    pub fn pop_samples(&mut self) {
+        for _ in 0..self.settings.stepsize() {
+            self.in_buf.pop_front();
+        }
+    }
+
+    pub fn analyse(
+        &mut self,
+        forward_fft: &dyn rustfft::FFT<f64>,
+        fft_in: &mut Vec<c64>,
+        fft_out: &mut Vec<c64>,
+        window: &Vec<f64>,
+        analysis_out: &mut Vec<Bin>,
+    ) {
+        // read in
+        for i in 0..self.settings.frame_size {
+            fft_in[i] = c64::new(self.in_buf[i] * window[i], 0.0);
+        }
+
+        forward_fft.process(fft_in, fft_out);
+
+        for i in 0..self.settings.frame_size {
+            let x = fft_out[i];
+            let (amp, phase) = x.to_polar();
+            let freq = self
+                .settings
+                .phase_to_frequency(i, phase - self.last_phase[i]);
+            self.last_phase[i] = phase;
+
+            analysis_out[i] = Bin::new(freq, amp * 2.0);
+        }
+    }
+}
+
 /// A phase vocoder.
 ///
 /// Roughly translated from http://blogs.zynaptiq.com/bernsee/pitch-shifting-using-the-ft/
 pub struct PhaseVocoder {
     channels: usize,
-    sample_rate: f64,
-    frame_size: usize,
-    time_res: usize,
+    settings: PhaseVocoderSettings,
+
+    analysis: Vec<PhaseVocoderAnalysis>,
 
     samples_waiting: usize,
-    in_buf: Vec<VecDeque<f64>>,
     out_buf: Vec<VecDeque<f64>>,
-    last_phase: Vec<Vec<f64>>,
     sum_phase: Vec<Vec<f64>>,
     output_accum: Vec<VecDeque<f64>>,
 
@@ -83,27 +194,28 @@ impl PhaseVocoder {
         frame_size: usize,
         time_res: usize,
     ) -> PhaseVocoder {
-        let mut frame_size = frame_size / time_res * time_res;
-        if frame_size == 0 {
-            frame_size = time_res;
-        }
+        let settings = PhaseVocoderSettings::new(sample_rate, frame_size, time_res);
 
-        // If `frame_size == 1`, computing the window would panic.
-        assert!(frame_size > 1);
+        Self::from_settings(channels, settings)
+    }
 
+    fn from_settings(channels: usize, settings: PhaseVocoderSettings) -> Self {
         let mut planner_forward = rustfft::FFTplanner::new(false);
         let mut planner_backward = rustfft::FFTplanner::new(true);
 
+        let mut analysis = Vec::new();
+        for _ in 0..channels {
+            analysis.push(PhaseVocoderAnalysis::from_settings(settings));
+        }
+
+        let frame_size = settings.frame_size;
+
         PhaseVocoder {
             channels,
-            sample_rate,
-            frame_size,
-            time_res,
+            settings,
 
             samples_waiting: 0,
-            in_buf: vec![VecDeque::new(); channels],
             out_buf: vec![VecDeque::new(); channels],
-            last_phase: vec![vec![0.0; frame_size]; channels],
             sum_phase: vec![vec![0.0; frame_size]; channels],
             output_accum: vec![VecDeque::new(); channels],
 
@@ -118,6 +230,8 @@ impl PhaseVocoder {
             fft_out: vec![c64::new(0.0, 0.0); frame_size],
             analysis_out: vec![vec![Bin::empty(); frame_size]; channels],
             synthesis_in: vec![vec![Bin::empty(); frame_size]; channels],
+
+            analysis,
         }
     }
 
@@ -126,15 +240,15 @@ impl PhaseVocoder {
     }
 
     pub fn num_bins(&self) -> usize {
-        self.frame_size
+        self.settings.frame_size
     }
 
     pub fn time_res(&self) -> usize {
-        self.time_res
+        self.settings.time_res
     }
 
     pub fn sample_rate(&self) -> f64 {
-        self.sample_rate
+        self.settings.sample_rate
     }
 
     /// Reads samples from `input`, processes the samples, then resynthesizes as many samples as
@@ -175,18 +289,16 @@ impl PhaseVocoder {
 
         // push samples to input queue
         for chan in 0..input.len() {
-            for sample in input[chan].iter() {
-                self.in_buf[chan].push_back(sample.to_f64().unwrap());
-                self.samples_waiting += 1;
-            }
+            self.analysis[chan].push_samples(&input[chan]);
+            self.samples_waiting += input[chan].len();
         }
 
-        while self.samples_waiting >= 2 * self.frame_size * self.channels {
-            let frame_sizef = self.frame_size as f64;
-            let time_resf = self.time_res as f64;
-            let step_size = frame_sizef / time_resf;
+        while self.samples_waiting >= 2 * self.num_bins() * self.channels {
+            let frame_sizef = self.num_bins() as f64;
+            let time_resf = self.time_res() as f64;
+            let step_size = self.settings.stepsize() as f64;
 
-            for _ in 0..self.time_res {
+            for _ in 0..self.time_res() {
                 // Initialise the synthesis bins to empty bins.
                 // This may be removed in a future release.
                 for synthesis_channel in self.synthesis_in.iter_mut() {
@@ -197,35 +309,26 @@ impl PhaseVocoder {
 
                 // ANALYSIS
                 for chan in 0..self.channels {
-                    // read in
-                    for i in 0..self.frame_size {
-                        self.fft_in[i] = c64::new(self.in_buf[chan][i] * self.window[i], 0.0);
-                    }
-
-                    self.forward_fft
-                        .process(&mut self.fft_in, &mut self.fft_out);
-
-                    for i in 0..self.frame_size {
-                        let x = self.fft_out[i];
-                        let (amp, phase) = x.to_polar();
-                        let freq = self.phase_to_frequency(i, phase - self.last_phase[chan][i]);
-                        self.last_phase[chan][i] = phase;
-
-                        self.analysis_out[chan][i] = Bin::new(freq, amp * 2.0);
-                    }
+                    self.analysis[chan].analyse(
+                        self.forward_fft.as_ref(),
+                        &mut self.fft_in,
+                        &mut self.fft_out,
+                        &self.window,
+                        &mut self.analysis_out[chan],
+                    );
                 }
 
                 // PROCESSING
                 processor(
                     self.channels,
-                    self.frame_size,
+                    self.num_bins(),
                     &self.analysis_out,
                     &mut self.synthesis_in,
                 );
 
                 // SYNTHESIS
                 for chan in 0..self.channels {
-                    for i in 0..self.frame_size {
+                    for i in 0..self.num_bins() {
                         let amp = self.synthesis_in[chan][i].amp;
                         let freq = self.synthesis_in[chan][i].freq;
                         let phase = self.frequency_to_phase(freq);
@@ -239,7 +342,7 @@ impl PhaseVocoder {
                         .process(&mut self.fft_in, &mut self.fft_out);
 
                     // accumulate
-                    for i in 0..self.frame_size {
+                    for i in 0..self.num_bins() {
                         if i == self.output_accum[chan].len() {
                             self.output_accum[chan].push_back(0.0);
                         }
@@ -250,11 +353,11 @@ impl PhaseVocoder {
                     // write out
                     for _ in 0..step_size as usize {
                         self.out_buf[chan].push_back(self.output_accum[chan].pop_front().unwrap());
-                        self.in_buf[chan].pop_front();
                     }
+                    self.analysis[chan].pop_samples();
                 }
             }
-            self.samples_waiting -= self.frame_size * self.channels;
+            self.samples_waiting -= self.num_bins() * self.channels;
         }
 
         // pop samples from output queue
@@ -272,28 +375,11 @@ impl PhaseVocoder {
     }
 
     pub fn phase_to_frequency(&self, bin: usize, phase: f64) -> f64 {
-        let frame_sizef = self.frame_size as f64;
-        let freq_per_bin = self.sample_rate / frame_sizef;
-        let time_resf = self.time_res as f64;
-        let step_size = frame_sizef / time_resf;
-        let expect = 2.0 * PI * step_size / frame_sizef;
-        let mut tmp = phase;
-        tmp -= (bin as f64) * expect;
-        let mut qpd = (tmp / PI) as i32;
-        if qpd >= 0 {
-            qpd += qpd & 1;
-        } else {
-            qpd -= qpd & 1;
-        }
-        tmp -= PI * (qpd as f64);
-        tmp = time_resf * tmp / (2.0 * PI);
-        tmp = (bin as f64) * freq_per_bin + tmp * freq_per_bin;
-        tmp
+        self.settings.phase_to_frequency(bin, phase)
     }
 
     pub fn frequency_to_phase(&self, freq: f64) -> f64 {
-        let step_size = self.frame_size as f64 / self.time_res as f64;
-        2.0 * PI * freq / self.sample_rate * step_size
+        self.settings.frequency_to_phase(freq)
     }
 }
 
