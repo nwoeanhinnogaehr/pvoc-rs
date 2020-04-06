@@ -84,7 +84,7 @@ impl PhaseVocoderSettings {
         2.0 * PI * freq / self.sample_rate * step_size
     }
 
-    pub fn stepsize(&self) -> usize {
+    pub fn step_size(&self) -> usize {
         self.frame_size / self.time_res
     }
 }
@@ -115,7 +115,7 @@ impl PhaseVocoderAnalysis {
     }
 
     pub fn pop_samples(&mut self) {
-        for _ in 0..self.settings.stepsize() {
+        for _ in 0..self.settings.step_size() {
             self.in_buf.pop_front();
         }
     }
@@ -123,10 +123,10 @@ impl PhaseVocoderAnalysis {
     pub fn analyse(
         &mut self,
         forward_fft: &dyn rustfft::FFT<f64>,
-        fft_in: &mut Vec<c64>,
-        fft_out: &mut Vec<c64>,
-        window: &Vec<f64>,
-        analysis_out: &mut Vec<Bin>,
+        fft_in: &mut [c64],
+        fft_out: &mut [c64],
+        window: &[f64],
+        analysis_out: &mut [Bin],
     ) {
         // read in
         for i in 0..self.settings.frame_size {
@@ -148,6 +148,70 @@ impl PhaseVocoderAnalysis {
     }
 }
 
+pub struct PhaseVocoderSynthesis {
+    settings: PhaseVocoderSettings,
+    out_buf: VecDeque<f64>,
+    sum_phase: Vec<f64>,
+    output_accum: VecDeque<f64>,
+}
+
+impl PhaseVocoderSynthesis {
+    pub fn new(sample_rate: f64, frame_size: usize, time_res: usize) -> Self {
+        Self::from_settings(PhaseVocoderSettings::new(sample_rate, frame_size, time_res))
+    }
+
+    fn from_settings(settings: PhaseVocoderSettings) -> Self {
+        PhaseVocoderSynthesis {
+            settings,
+            out_buf: VecDeque::new(),
+            sum_phase: vec![0.0; settings.frame_size],
+            output_accum: VecDeque::new(),
+        }
+    }
+
+    fn synthesize(
+        &mut self,
+        backward_fft: &dyn rustfft::FFT<f64>,
+        fft_in: &mut [c64],
+        fft_out: &mut [c64],
+        synthesis_in: &[Bin],
+        window: &[f64],
+    ) {
+        let frame_sizef = self.settings.frame_size as f64;
+        let time_resf = self.settings.time_res as f64;
+
+        for i in 0..self.settings.frame_size {
+            let amp = synthesis_in[i].amp;
+            let freq = synthesis_in[i].freq;
+            let phase = self.settings.frequency_to_phase(freq);
+            self.sum_phase[i] += phase;
+            let phase = self.sum_phase[i];
+
+            fft_in[i] = c64::from_polar(&amp, &phase);
+        }
+
+        backward_fft.process(fft_in, fft_out);
+
+        // accumulate
+        for i in 0..self.settings.frame_size {
+            if i == self.output_accum.len() {
+                self.output_accum.push_back(0.0);
+            }
+            self.output_accum[i] += window[i] * fft_out[i].re / (frame_sizef * time_resf);
+        }
+
+        // write out
+        for _ in 0..self.settings.step_size() {
+            self.out_buf
+                .push_back(self.output_accum.pop_front().unwrap());
+        }
+    }
+
+    pub fn pop_sample(&mut self) -> Option<f64> {
+        self.out_buf.pop_front()
+    }
+}
+
 /// A phase vocoder.
 ///
 /// Roughly translated from http://blogs.zynaptiq.com/bernsee/pitch-shifting-using-the-ft/
@@ -156,12 +220,9 @@ pub struct PhaseVocoder {
     settings: PhaseVocoderSettings,
 
     analysis: Vec<PhaseVocoderAnalysis>,
+    synthesis: Vec<PhaseVocoderSynthesis>,
 
     samples_waiting: usize,
-    out_buf: Vec<VecDeque<f64>>,
-    sum_phase: Vec<Vec<f64>>,
-    output_accum: Vec<VecDeque<f64>>,
-
     forward_fft: Arc<dyn rustfft::FFT<f64>>,
     backward_fft: Arc<dyn rustfft::FFT<f64>>,
 
@@ -204,8 +265,10 @@ impl PhaseVocoder {
         let mut planner_backward = rustfft::FFTplanner::new(true);
 
         let mut analysis = Vec::new();
+        let mut synthesis = Vec::new();
         for _ in 0..channels {
             analysis.push(PhaseVocoderAnalysis::from_settings(settings));
+            synthesis.push(PhaseVocoderSynthesis::from_settings(settings));
         }
 
         let frame_size = settings.frame_size;
@@ -215,9 +278,6 @@ impl PhaseVocoder {
             settings,
 
             samples_waiting: 0,
-            out_buf: vec![VecDeque::new(); channels],
-            sum_phase: vec![vec![0.0; frame_size]; channels],
-            output_accum: vec![VecDeque::new(); channels],
 
             forward_fft: planner_forward.plan_fft(frame_size),
             backward_fft: planner_backward.plan_fft(frame_size),
@@ -232,6 +292,7 @@ impl PhaseVocoder {
             synthesis_in: vec![vec![Bin::empty(); frame_size]; channels],
 
             analysis,
+            synthesis,
         }
     }
 
@@ -294,19 +355,7 @@ impl PhaseVocoder {
         }
 
         while self.samples_waiting >= 2 * self.num_bins() * self.channels {
-            let frame_sizef = self.num_bins() as f64;
-            let time_resf = self.time_res() as f64;
-            let step_size = self.settings.stepsize() as f64;
-
             for _ in 0..self.time_res() {
-                // Initialise the synthesis bins to empty bins.
-                // This may be removed in a future release.
-                for synthesis_channel in self.synthesis_in.iter_mut() {
-                    for bin in synthesis_channel.iter_mut() {
-                        *bin = Bin::empty();
-                    }
-                }
-
                 // ANALYSIS
                 for chan in 0..self.channels {
                     self.analysis[chan].analyse(
@@ -316,6 +365,14 @@ impl PhaseVocoder {
                         &self.window,
                         &mut self.analysis_out[chan],
                     );
+                }
+
+                // Initialise the synthesis bins to empty bins.
+                // This may be removed in a future release.
+                for synthesis_channel in self.synthesis_in.iter_mut() {
+                    for bin in synthesis_channel.iter_mut() {
+                        *bin = Bin::empty();
+                    }
                 }
 
                 // PROCESSING
@@ -328,32 +385,13 @@ impl PhaseVocoder {
 
                 // SYNTHESIS
                 for chan in 0..self.channels {
-                    for i in 0..self.num_bins() {
-                        let amp = self.synthesis_in[chan][i].amp;
-                        let freq = self.synthesis_in[chan][i].freq;
-                        let phase = self.frequency_to_phase(freq);
-                        self.sum_phase[chan][i] += phase;
-                        let phase = self.sum_phase[chan][i];
-
-                        self.fft_in[i] = c64::from_polar(&amp, &phase);
-                    }
-
-                    self.backward_fft
-                        .process(&mut self.fft_in, &mut self.fft_out);
-
-                    // accumulate
-                    for i in 0..self.num_bins() {
-                        if i == self.output_accum[chan].len() {
-                            self.output_accum[chan].push_back(0.0);
-                        }
-                        self.output_accum[chan][i] +=
-                            self.window[i] * self.fft_out[i].re / (frame_sizef * time_resf);
-                    }
-
-                    // write out
-                    for _ in 0..step_size as usize {
-                        self.out_buf[chan].push_back(self.output_accum[chan].pop_front().unwrap());
-                    }
+                    self.synthesis[chan].synthesize(
+                        self.backward_fft.as_ref(),
+                        &mut self.fft_in,
+                        &mut self.fft_out,
+                        &self.synthesis_in[chan],
+                        &self.window,
+                    );
                     self.analysis[chan].pop_samples();
                 }
             }
@@ -364,7 +402,7 @@ impl PhaseVocoder {
         let mut n_written = 0;
         for chan in 0..self.channels {
             for samp in 0..output[chan].len() {
-                output[chan][samp] = match self.out_buf[chan].pop_front() {
+                output[chan][samp] = match self.synthesis[chan].pop_sample() {
                     Some(x) => FromPrimitive::from_f64(x).unwrap(),
                     None => break,
                 };
