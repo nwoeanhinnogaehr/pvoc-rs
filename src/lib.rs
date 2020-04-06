@@ -307,12 +307,54 @@ fn identity(channels: usize, bins: usize, input: &[Vec<Bin>], output: &mut [Vec<
 }
 
 #[cfg(test)]
+fn test_data_is_reconstructed_two_channels(
+    mut pvoc: PhaseVocoder,
+    input_samples_left: &[f32],
+    input_samples_right: &[f32],
+) {
+    let mut output_samples_left = vec![0.0; input_samples_left.len()];
+    let mut output_samples_right = vec![0.0; input_samples_right.len()];
+    let frame_size = pvoc.num_bins();
+    // Pre-padding, not collecting any output.
+    pvoc.process(
+        &[&vec![0.0; frame_size], &vec![0.0; frame_size]],
+        &mut [&mut Vec::new(), &mut Vec::new()],
+        identity,
+    );
+    // The data itself, collecting some output that we will discard
+    let mut scratch_left = vec![0.0; frame_size];
+    let mut scratch_right = vec![0.0; frame_size];
+    pvoc.process(
+        &[&input_samples_left, &input_samples_right],
+        &mut [&mut scratch_left, &mut scratch_right],
+        identity,
+    );
+    // Post-padding and collecting all output
+    pvoc.process(
+        &[&vec![0.0; frame_size], &vec![0.0; frame_size]],
+        &mut [&mut output_samples_left, &mut output_samples_right],
+        identity,
+    );
+
+    assert_ulps_eq!(
+        input_samples_left,
+        output_samples_left.as_slice(),
+        epsilon = 1e-2
+    );
+    assert_ulps_eq!(
+        input_samples_right,
+        output_samples_right.as_slice(),
+        epsilon = 1e-2
+    );
+}
+
+#[cfg(test)]
 fn test_data_is_reconstructed(mut pvoc: PhaseVocoder, input_samples: &[f32]) {
     let mut output_samples = vec![0.0; input_samples.len()];
     let frame_size = pvoc.num_bins();
     // Pre-padding, not collecting any output.
     pvoc.process(&[&vec![0.0; frame_size]], &mut [&mut Vec::new()], identity);
-    // The data-itself, collecting some output that we will discard
+    // The data itself, collecting some output that we will discard
     let mut scratch = vec![0.0; frame_size];
     pvoc.process(&[&input_samples], &mut [&mut scratch], identity);
     // Post-padding and collecting all output
@@ -350,6 +392,15 @@ fn identity_transform_reconstructs_original_data_random_data() {
 }
 
 #[test]
+fn identity_transform_reconstructs_original_data_random_data_with_two_channels() {
+    let pvoc = PhaseVocoder::new(2, 44100.0, 128, 128 / 4);
+    let input_samples_all = include!("./random_test_data.rs");
+    let (input_samples_left, input_samples_right) =
+        input_samples_all.split_at(input_samples_all.len() / 2);
+    test_data_is_reconstructed_two_channels(pvoc, &input_samples_left, &input_samples_right);
+}
+
+#[test]
 fn process_works_with_sample_res_equal_to_window() {
     let mut pvoc = PhaseVocoder::new(1, 44100.0, 256, 256);
     let input_len = 1024;
@@ -359,15 +410,50 @@ fn process_works_with_sample_res_equal_to_window() {
 }
 
 #[test]
+fn process_works_with_sample_res_equal_to_window_two_channels() {
+    let mut pvoc = PhaseVocoder::new(2, 44100.0, 256, 256);
+    let input_len = 1024;
+    let input_samples_left = vec![0.0; input_len];
+    let input_samples_right = vec![0.0; input_len];
+    let mut output_samples_left = vec![0.0; input_len];
+    let mut output_samples_right = vec![0.0; input_len];
+    pvoc.process(
+        &[&input_samples_left, &input_samples_right],
+        &mut [&mut output_samples_left, &mut output_samples_right],
+        identity,
+    );
+}
+
+#[test]
 fn process_works_when_reading_sample_by_sample() {
     let mut pvoc = PhaseVocoder::new(1, 44100.0, 8, 2);
     let input_len = 32;
     let input_samples = vec![0.0; input_len];
     let mut output_samples = vec![0.0; input_len];
-    for i in 0..input_samples.len() {
+    for i in 0..input_len {
         pvoc.process(
-            &[&input_samples[dbg!(i)..i + 1]],
+            &[&input_samples[i..i + 1]],
             &mut [&mut output_samples],
+            identity,
+        );
+    }
+}
+
+#[test]
+fn process_works_when_reading_sample_by_sample_two_channels() {
+    let mut pvoc = PhaseVocoder::new(2, 44100.0, 8, 2);
+    let input_len = 32;
+    let input_samples_left = vec![0.0; input_len];
+    let input_samples_right = vec![0.0; input_len];
+    let mut output_samples_left = vec![0.0; input_len];
+    let mut output_samples_right = vec![0.0; input_len];
+    for i in 0..input_len {
+        pvoc.process(
+            &[
+                &input_samples_left[i..i + 1],
+                &input_samples_right[i..i + 1],
+            ],
+            &mut [&mut output_samples_left, &mut output_samples_right],
             identity,
         );
     }
