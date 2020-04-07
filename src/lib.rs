@@ -114,12 +114,6 @@ impl PhaseVocoderAnalysis {
         }
     }
 
-    pub fn pop_samples(&mut self) {
-        for _ in 0..self.settings.step_size() {
-            self.in_buf.pop_front();
-        }
-    }
-
     pub fn analyse(
         &mut self,
         forward_fft: &dyn rustfft::FFT<f64>,
@@ -144,6 +138,10 @@ impl PhaseVocoderAnalysis {
             self.last_phase[i] = phase;
 
             analysis_out[i] = Bin::new(freq, amp * 2.0);
+        }
+
+        for _ in 0..self.settings.step_size() {
+            self.in_buf.pop_front();
         }
     }
 }
@@ -392,7 +390,6 @@ impl PhaseVocoder {
                         &self.synthesis_in[chan],
                         &self.window,
                     );
-                    self.analysis[chan].pop_samples();
                 }
             }
             self.samples_waiting -= self.num_bins() * self.channels;
