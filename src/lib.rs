@@ -103,12 +103,12 @@ impl PhaseVocoderAnalysis {
     fn from_settings(settings: PhaseVocoderSettings) -> Self {
         Self {
             settings,
-            in_buf: VecDeque::new(),
+            in_buf: VecDeque::with_capacity(settings.frame_size),
             last_phase: vec![0.0; settings.frame_size],
         }
     }
 
-    pub fn push_samples<S: Float + ToPrimitive + FromPrimitive>(&mut self, samples: &[S]) {
+    pub fn push_samples<S: ToPrimitive>(&mut self, samples: &[S]) {
         for sample in samples.iter() {
             self.in_buf.push_back(sample.to_f64().unwrap());
         }
@@ -161,9 +161,9 @@ impl PhaseVocoderSynthesis {
     fn from_settings(settings: PhaseVocoderSettings) -> Self {
         PhaseVocoderSynthesis {
             settings,
-            out_buf: VecDeque::new(),
+            out_buf: VecDeque::with_capacity(settings.step_size()),
             sum_phase: vec![0.0; settings.frame_size],
-            output_accum: VecDeque::new(),
+            output_accum: VecDeque::with_capacity(settings.frame_size),
         }
     }
 
