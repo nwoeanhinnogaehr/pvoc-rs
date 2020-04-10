@@ -114,6 +114,8 @@ impl PhaseVocoderAnalysis {
         }
     }
 
+    /// Returns `true` when data has been written to the `analysis_out` parameter.
+    /// Returns `false` when there are not enough samples available.
     pub fn analyse(
         &mut self,
         forward_fft: &dyn rustfft::FFT<f64>,
@@ -121,7 +123,11 @@ impl PhaseVocoderAnalysis {
         fft_out: &mut [c64],
         window: &[f64],
         analysis_out: &mut [Bin],
-    ) {
+    ) -> bool {
+        if self.in_buf.len() < self.settings.frame_size {
+            return false;
+        }
+
         // read in
         for i in 0..self.settings.frame_size {
             fft_in[i] = c64::new(self.in_buf[i] * window[i], 0.0);
@@ -143,6 +149,7 @@ impl PhaseVocoderAnalysis {
         for _ in 0..self.settings.step_size() {
             self.in_buf.pop_front();
         }
+        true
     }
 }
 
