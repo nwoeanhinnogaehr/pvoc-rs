@@ -51,13 +51,14 @@ pub struct PhaseVocoder {
     sum_phase: Vec<Vec<f64>>,
     output_accum: Vec<VecDeque<f64>>,
 
-    forward_fft: Arc<dyn rustfft::FFT<f64>>,
-    backward_fft: Arc<dyn rustfft::FFT<f64>>,
+    forward_fft: Arc<dyn rustfft::Fft<f64>>,
+    backward_fft: Arc<dyn rustfft::Fft<f64>>,
 
     window: Vec<f64>,
 
     fft_in: Vec<c64>,
     fft_out: Vec<c64>,
+    fft_scratch: Vec<c64>,
     analysis_out: Vec<Vec<Bin>>,
     synthesis_in: Vec<Vec<Bin>>,
 }
@@ -91,8 +92,7 @@ impl PhaseVocoder {
         // If `frame_size == 1`, computing the window would panic.
         assert!(frame_size > 1);
 
-        let mut planner_forward = rustfft::FFTplanner::new(false);
-        let mut planner_backward = rustfft::FFTplanner::new(true);
+        let mut fft_planner = rustfft::FftPlanner::new();
 
         PhaseVocoder {
             channels,
@@ -107,8 +107,8 @@ impl PhaseVocoder {
             sum_phase: vec![vec![0.0; frame_size]; channels],
             output_accum: vec![VecDeque::new(); channels],
 
-            forward_fft: planner_forward.plan_fft(frame_size),
-            backward_fft: planner_backward.plan_fft(frame_size),
+            forward_fft: fft_planner.plan_fft(frame_size, rustfft::FftDirection::Forward),
+            backward_fft: fft_planner.plan_fft(frame_size, rustfft::FftDirection::Inverse),
 
             window: apodize::hanning_iter(frame_size)
                 .map(|x| x.sqrt())
@@ -116,6 +116,7 @@ impl PhaseVocoder {
 
             fft_in: vec![c64::new(0.0, 0.0); frame_size],
             fft_out: vec![c64::new(0.0, 0.0); frame_size],
+            fft_scratch: vec![c64::new(0.0, 0.0); frame_size],
             analysis_out: vec![vec![Bin::empty(); frame_size]; channels],
             synthesis_in: vec![vec![Bin::empty(); frame_size]; channels],
         }
@@ -203,7 +204,7 @@ impl PhaseVocoder {
                     }
 
                     self.forward_fft
-                        .process(&mut self.fft_in, &mut self.fft_out);
+                        .process_outofplace_with_scratch(&mut self.fft_in, &mut self.fft_out, &mut self.fft_scratch);
 
                     for i in 0..self.frame_size {
                         let x = self.fft_out[i];
@@ -232,11 +233,11 @@ impl PhaseVocoder {
                         self.sum_phase[chan][i] += phase;
                         let phase = self.sum_phase[chan][i];
 
-                        self.fft_in[i] = c64::from_polar(&amp, &phase);
+                        self.fft_in[i] = c64::from_polar(amp, phase);
                     }
 
                     self.backward_fft
-                        .process(&mut self.fft_in, &mut self.fft_out);
+                        .process_outofplace_with_scratch(&mut self.fft_in, &mut self.fft_out, &mut self.fft_scratch);
 
                     // accumulate
                     for i in 0..self.frame_size {
