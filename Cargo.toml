@@ -1,6 +1,6 @@
 [package]
 name = "pvoc"
-version = "0.1.5"
+version = "0.1.6"
 authors = ["Noah Weninger <nweninge@ualberta.ca>"]
 description = "A phase vocoder for making audio effects"
 repository = "https://github.com/nwoeanhinnogaehr/pvoc-rs"
