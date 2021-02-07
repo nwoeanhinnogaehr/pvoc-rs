@@ -96,7 +96,7 @@ impl PhaseVocoder {
 
         let mut fft_planner = rustfft::FftPlanner::new();
 
-        PhaseVocoder {
+        let mut pv = PhaseVocoder {
             channels,
             sample_rate,
             frame_size,
@@ -118,10 +118,13 @@ impl PhaseVocoder {
 
             fft_in: vec![c64::new(0.0, 0.0); frame_size],
             fft_out: vec![c64::new(0.0, 0.0); frame_size],
-            fft_scratch: vec![c64::new(0.0, 0.0); frame_size],
+            fft_scratch: vec![],
             analysis_out: vec![vec![Bin::empty(); frame_size]; channels],
             synthesis_in: vec![vec![Bin::empty(); frame_size]; channels],
-        }
+        };
+        pv.fft_scratch = vec![c64::new(0.0, 0.0); pv.forward_fft.get_outofplace_scratch_len()
+            .max(pv.backward_fft.get_outofplace_scratch_len())];
+        pv
     }
 
     pub fn num_channels(&self) -> usize {
