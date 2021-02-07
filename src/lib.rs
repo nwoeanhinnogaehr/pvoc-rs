@@ -3,6 +3,8 @@ extern crate rustfft;
 #[cfg(test)]
 #[macro_use]
 extern crate approx;
+#[cfg(test)]
+extern crate rand;
 
 use rustfft::num_complex::Complex;
 use rustfft::num_traits::{Float, FromPrimitive, ToPrimitive};
@@ -344,8 +346,12 @@ fn identity_transform_reconstructs_original_data_hat_function() {
 
 #[test]
 fn identity_transform_reconstructs_original_data_random_data() {
+    use rand::{Rng, SeedableRng};
+    use rand::rngs::SmallRng;
+    let mut rng = SmallRng::seed_from_u64(1);
+    let mut input_samples = [0.0; 16384];
+    rng.fill(&mut input_samples[..]);
     let pvoc = PhaseVocoder::new(1, 44100.0, 256, 256 / 4);
-    let input_samples = include!("./random_test_data.rs");
     test_data_is_reconstructed(pvoc, &input_samples);
 }
 

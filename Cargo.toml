@@ -14,3 +14,7 @@ apodize = "1.0.0"
 
 [dev-dependencies]
 approx = "0.3.2"
+
+[dev-dependencies.rand]
+version = "0.8.3"
+features = ["small_rng"]
