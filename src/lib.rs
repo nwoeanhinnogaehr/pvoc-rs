@@ -3,6 +3,8 @@ extern crate rustfft;
 #[cfg(test)]
 #[macro_use]
 extern crate approx;
+#[cfg(test)]
+extern crate rand;
 
 use rustfft::num_complex::Complex;
 use rustfft::num_traits::{Float, FromPrimitive, ToPrimitive};
@@ -116,13 +118,16 @@ impl PhaseVocoderAnalysis {
 
     /// Returns `true` when data has been written to the `analysis_out` parameter.
     /// Returns `false` when there are not enough samples available.
+    ///
+    /// # Panics
+    /// Panics if `fft_scratch.len() < forward_fft.get_inplace_scratch_len()`
     pub fn analyse(
         &mut self,
-        forward_fft: &dyn rustfft::FFT<f64>,
-        fft_in: &mut [c64],
+        forward_fft: &dyn rustfft::Fft<f64>,
         fft_out: &mut [c64],
         window: &[f64],
         analysis_out: &mut [Bin],
+        fft_scratch: &mut [c64],
     ) -> bool {
         if self.in_buf.len() < self.settings.frame_size {
             return false;
@@ -130,10 +135,10 @@ impl PhaseVocoderAnalysis {
 
         // read in
         for i in 0..self.settings.frame_size {
-            fft_in[i] = c64::new(self.in_buf[i] * window[i], 0.0);
+            fft_out[i] = c64::new(self.in_buf[i] * window[i], 0.0);
         }
 
-        forward_fft.process(fft_in, fft_out);
+        forward_fft.process_with_scratch(fft_out, fft_scratch);
 
         for i in 0..self.settings.frame_size {
             let x = fft_out[i];
@@ -176,11 +181,11 @@ impl PhaseVocoderSynthesis {
 
     fn synthesize(
         &mut self,
-        backward_fft: &dyn rustfft::FFT<f64>,
-        fft_in: &mut [c64],
+        backward_fft: &dyn rustfft::Fft<f64>,
         fft_out: &mut [c64],
         synthesis_in: &[Bin],
         window: &[f64],
+        fft_scratch: &mut [c64],
     ) {
         let frame_sizef = self.settings.frame_size as f64;
         let time_resf = self.settings.time_res as f64;
@@ -192,10 +197,10 @@ impl PhaseVocoderSynthesis {
             self.sum_phase[i] += phase;
             let phase = self.sum_phase[i];
 
-            fft_in[i] = c64::from_polar(&amp, &phase);
+            fft_out[i] = c64::from_polar(amp, phase);
         }
 
-        backward_fft.process(fft_in, fft_out);
+        backward_fft.process_with_scratch(fft_out, fft_scratch);
 
         // accumulate
         for i in 0..self.settings.frame_size {
@@ -228,13 +233,13 @@ pub struct PhaseVocoder {
     synthesis: Vec<PhaseVocoderSynthesis>,
 
     samples_waiting: usize,
-    forward_fft: Arc<dyn rustfft::FFT<f64>>,
-    backward_fft: Arc<dyn rustfft::FFT<f64>>,
+    forward_fft: Arc<dyn rustfft::Fft<f64>>,
+    backward_fft: Arc<dyn rustfft::Fft<f64>>,
 
     window: Vec<f64>,
 
-    fft_in: Vec<c64>,
     fft_out: Vec<c64>,
+    fft_scratch: Vec<c64>,
     analysis_out: Vec<Vec<Bin>>,
     synthesis_in: Vec<Vec<Bin>>,
 }
@@ -266,8 +271,10 @@ impl PhaseVocoder {
     }
 
     fn from_settings(channels: usize, settings: PhaseVocoderSettings) -> Self {
-        let mut planner_forward = rustfft::FFTplanner::new(false);
-        let mut planner_backward = rustfft::FFTplanner::new(true);
+        let frame_size = settings.frame_size;
+        let mut fft_planner = rustfft::FftPlanner::new();
+        let planner_forward = fft_planner.plan_fft(frame_size, rustfft::FftDirection::Forward);
+        let planner_backward = fft_planner.plan_fft(frame_size, rustfft::FftDirection::Inverse);
 
         let mut analysis = Vec::new();
         let mut synthesis = Vec::new();
@@ -276,7 +283,8 @@ impl PhaseVocoder {
             synthesis.push(PhaseVocoderSynthesis::from_settings(settings));
         }
 
-        let frame_size = settings.frame_size;
+        let scratch_len = dbg!(dbg!(planner_forward.get_inplace_scratch_len())
+            .max(planner_forward.get_inplace_scratch_len()));
 
         PhaseVocoder {
             channels,
@@ -284,18 +292,17 @@ impl PhaseVocoder {
 
             samples_waiting: 0,
 
-            forward_fft: planner_forward.plan_fft(frame_size),
-            backward_fft: planner_backward.plan_fft(frame_size),
+            forward_fft: planner_forward,
+            backward_fft: planner_backward,
 
             window: apodize::hanning_iter(frame_size)
                 .map(|x| x.sqrt())
                 .collect(),
 
-            fft_in: vec![c64::new(0.0, 0.0); frame_size],
             fft_out: vec![c64::new(0.0, 0.0); frame_size],
+            fft_scratch: vec![c64::new(0.0, 0.0); scratch_len],
             analysis_out: vec![vec![Bin::empty(); frame_size]; channels],
             synthesis_in: vec![vec![Bin::empty(); frame_size]; channels],
-
             analysis,
             synthesis,
         }
@@ -365,10 +372,10 @@ impl PhaseVocoder {
                 for chan in 0..self.channels {
                     self.analysis[chan].analyse(
                         self.forward_fft.as_ref(),
-                        &mut self.fft_in,
                         &mut self.fft_out,
                         &self.window,
                         &mut self.analysis_out[chan],
+                        &mut self.fft_scratch,
                     );
                 }
 
@@ -392,10 +399,10 @@ impl PhaseVocoder {
                 for chan in 0..self.channels {
                     self.synthesis[chan].synthesize(
                         self.backward_fft.as_ref(),
-                        &mut self.fft_in,
                         &mut self.fft_out,
                         &self.synthesis_in[chan],
                         &self.window,
+                        &mut self.fft_scratch,
                     );
                 }
             }
@@ -514,15 +521,23 @@ fn identity_transform_reconstructs_original_data_hat_function() {
 
 #[test]
 fn identity_transform_reconstructs_original_data_random_data() {
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
+    let mut rng = SmallRng::seed_from_u64(1);
+    let mut input_samples = [0.0; 16384];
+    rng.fill(&mut input_samples[..]);
     let pvoc = PhaseVocoder::new(1, 44100.0, 256, 256 / 4);
-    let input_samples = include!("./random_test_data.rs");
     test_data_is_reconstructed(pvoc, &input_samples);
 }
 
 #[test]
 fn identity_transform_reconstructs_original_data_random_data_with_two_channels() {
     let pvoc = PhaseVocoder::new(2, 44100.0, 128, 128 / 4);
-    let input_samples_all = include!("./random_test_data.rs");
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
+    let mut rng = SmallRng::seed_from_u64(1);
+    let mut input_samples_all = [0.0; 16384];
+    rng.fill(&mut input_samples_all[..]);
     let (input_samples_left, input_samples_right) =
         input_samples_all.split_at(input_samples_all.len() / 2);
     test_data_is_reconstructed_two_channels(pvoc, &input_samples_left, &input_samples_right);

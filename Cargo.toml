@@ -1,6 +1,6 @@
 [package]
 name = "pvoc"
-version = "0.1.5"
+version = "0.1.7"
 authors = ["Noah Weninger <nweninge@ualberta.ca>"]
 description = "A phase vocoder for making audio effects"
 repository = "https://github.com/nwoeanhinnogaehr/pvoc-rs"
@@ -9,8 +9,12 @@ keywords = ["audio", "fft", "dsp", "fourier"]
 license = "GPL-3.0"
 
 [dependencies]
-rustfft = "3.0.1"
+rustfft = "5.0.1"
 apodize = "1.0.0"
 
 [dev-dependencies]
 approx = "0.3.2"
+
+[dev-dependencies.rand]
+version = "0.8.3"
+features = ["small_rng"]
